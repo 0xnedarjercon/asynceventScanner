@@ -1,0 +1,29 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+              "tests",  // Replace this with the path to your tests if different
+              "--capture=no",  // Optional: Disable output capturing for better logging
+              "--disable-warnings"  // Optional: Disable warnings
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false  // Optional: Debug inside libraries
+          }
+        ]
+      }
+      

@@ -1,0 +1,6 @@
+statistics collection of rpc performance
+find a way to get rolling filehandler working with multprocess logging
+unit tests
+add threads in each process with more rpcs -  need async web3.py running first
+fix double logging issue
+update test cases for new architecture
