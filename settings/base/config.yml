@@ -1,0 +1,108 @@
+#settings for rpc proiders
+RPCSETTINGS:
+  https://base.llamarpc.com:
+    MAXCHUNKSIZE: 1000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://base.drpc.org:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - ""
+    POLLPERIOD: 1
+  https://api.zan.top/base-mainnet:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://developer-access-mainnet.base.org:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://mainnet.base.org:
+    MAXCHUNKSIZE: 9000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 9000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://base-rpc.publicnode.com:
+    MAXCHUNKSIZE: 5000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 100
+    LOGNAMES:
+      - default
+    POLLPERIOD: 1
+    MODES:
+      - live_blocks
+W3SETTINGS:
+  NUMJOBS: 2
+  MAINRPC: false
+  LOGNAMES:
+    - default
+RPCOVERRIDE:
+  MAXCHUNKSIZE: ""
+  STARTCHUNKSIZE: ""
+  EVENTSTARGET: ""
+  POLLINTERVAL: ""
+  DEBUGLEVEL: ""
+  ACTIVESTATES: ""
+FILESETTINGS:
+  SAVEINTERVAL: 600
+  FILENAME: basescan
+  MAXENTRIES: 10000
+  LOGNAMES:
+    - default
+  FRESHLOGS: true
+  TYPE: SQLITE3             #type of file storage - SQLITE3 or JSON
+  DBSETTINGS:
+    TABLENAME: data         #name of the table
+    TABLEFORMAT:            #SQL table format, 
+    #standard output from getLogs
+      block_number:         'BIGINT  NOT NULL'
+      'tx_hash'  :          'TEXT    NOT NULL'
+      'contract_address' :  'TEXT    NOT NULL'
+      'event_type'   :      'TEXT    NOT NULL'
+      'event_index'  :      'INTEGER NOT NULL'
+  #event specific output from getlogs, searches inside logdata and populates if exists
+      "to"      :           'TEXT'
+      "from"     :          'TEXT'
+      'sender'     :        'TEXT'
+      'event_data'  :       "JSON   DEFAULT '{}'" #contains json dumped event data not listed above
+    PRIMARYKEYS: [block_number, tx_hash, event_type, event_index]
+    ADDRESSES: []           #which addresses should go into this db, empty for all
+    INDEXEDFIELDS: []       #additional index if needed
+    NEEDSUNIQUE: false      #whether indexed fields need to be unique
+
+SCANSETTINGS:
+  NAME: scanner
+  STARTBLOCK: 16088296
+  ENDBLOCK: 16098296
+  LIVETHRESHOLD: 100
+  FORCENEW: false
+  CONTRACTS:
+    0x8351616F224a035Aa5ee6b9f74A68659701af3e9: GAUGE
+    0x7f670f78b17dec44d5ef68a48740b6f8849cc2e6: AEROPAIR
+  MODE: ANYEVENT
+  EVENTS:
+    - Sync
+    - Transfer
