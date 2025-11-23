@@ -24,7 +24,7 @@ def loadConfig(config):
         cfg = config
 
     else:
-        with open(config, 'r') as config_file:
+        with open(config, "r") as config_file:
             cfg = yaml.safe_load(config_file)
     fileSettings = cfg["FILESETTINGS"]
     scanSettings = cfg["SCANSETTINGS"]
@@ -43,8 +43,11 @@ def refreshLogs():
         if os.path.isfile(item_path):
             os.remove(item_path)
             print(f"Deleted file: {item_path}")
+
+
 def getConfig():
     return fileSettings, scanSettings, rpcSettings, web3Settings
+
 
 cfg = loadConfig(configPath + "config.yml")
 refreshLogs()

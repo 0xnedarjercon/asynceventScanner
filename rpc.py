@@ -239,7 +239,6 @@ class RPC(Logger):
         async with jobLock:
             remaining.insert(0, [_min, _max])
 
-
     async def processNewEvents(
         self, filter, remaining, jobLock, results, blockNum=None
     ):
