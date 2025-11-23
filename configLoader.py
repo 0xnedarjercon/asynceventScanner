@@ -5,7 +5,7 @@ import yaml
 
 load_dotenv()
 folderPath = os.getenv("FOLDER_PATH")
-configPath = f"{os.path.dirname(os.path.abspath(__file__))}\\settings\\{folderPath}\\"
+configPath = f"{os.path.dirname(os.path.abspath(__file__))}/settings/{folderPath}/"
 abiPath = f"{os.path.dirname(os.path.abspath(__file__))}/settings/ABIs/"
 fileSettings = {}
 scanSettings = {}
@@ -38,7 +38,7 @@ def loadConfig(config):
 
 def refreshLogs():
     print("removing old logfiles...")
-    for item_name in os.listdir(f"./settings/{folderPath}/logs"):
+    for item_name in os.listdir(f"./settings/{folderPath}/logs/"):
         item_path = os.path.join(f"./settings/{folderPath}/logs", item_name)
         if os.path.isfile(item_path):
             os.remove(item_path)

@@ -8,12 +8,12 @@ from logger import Logger
 from configLoader import loadConfig, abiPath
 from rpc import RPC
 
-directory = os.path.dirname(os.path.abspath(__file__))
 from fileHandler import DBFileHandler
 from dotenv import load_dotenv
 import asyncio
 from helpers.utils import getW3
 
+directory = os.path.dirname(os.path.abspath(__file__))
 # from Verifier import Verifier
 
 
@@ -106,7 +106,7 @@ class EventScanner(Logger):
         files = os.listdir(abiPath)
         for file in files:
             if file.endswith(".json"):
-                self.abis[file[:-5]] = json.load(open(self.configPath + "ABIs/" + file))
+                self.abis[file[:-5]] = json.load(open(abiPath + file))
 
     # --------------------------- scan functions -----------------------------
 
