@@ -43,7 +43,8 @@ def refreshLogs():
         if os.path.isfile(item_path):
             os.remove(item_path)
             print(f"Deleted file: {item_path}")
-
+def getConfig():
+    return fileSettings, scanSettings, rpcSettings, web3Settings
 
 cfg = loadConfig(configPath + "config.yml")
 refreshLogs()

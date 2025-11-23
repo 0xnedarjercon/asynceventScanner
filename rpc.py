@@ -6,8 +6,7 @@ import math
 import asyncio
 import traceback
 import copy
-from utils import blocks
-from utils import getW3
+from helpers.utils import blocks, getW3
 import websockets
 import web3
 from web3.exceptions import Web3RPCError
@@ -63,7 +62,7 @@ class RPC(Logger):
         self.running = True
         self.filter = filter = filter.copy()
         async with jobLock:
-            self.live = len(remaining) > 0 and (remaining[1] == "latest")
+            self.live = len(remaining) > 0 and (remaining[0][1] == "latest")
         if self.live:
             if "live_logs" in self.modes:
                 await self.liveScanLogs(remaining, filter, results, jobLock)
@@ -197,14 +196,13 @@ class RPC(Logger):
         if len(self.currentJobs) == 0:
             async with jobLock:
                 if len(remaining) > 0:
-                    startBlock = remaining[-2]
-                    if remaining[-2] + self.currentChunkSize >= remaining[-1]:
-                        endBlock = remaining[-1]
-                        remaining.pop(-1)
-                        remaining.pop(-1)
+                    startBlock = remaining[0][0]
+                    if remaining[0][0] + self.currentChunkSize >= remaining[0][1]:
+                        endBlock = remaining[0][1]
+                        remaining.pop(0)
                     else:
                         endBlock = startBlock + self.currentChunkSize
-                        remaining[-2] = endBlock + 1
+                        remaining[0][0] = endBlock + 1
                 else:
                     return
             filter["fromBlock"] = startBlock
@@ -239,8 +237,8 @@ class RPC(Logger):
         filter["fromBlock"] = _min
         filter["toBlock"] = _max
         async with jobLock:
-            remaining.append(_min)
-            remaining.append(_max)
+            remaining.insert(0, [_min, _max])
+
 
     async def processNewEvents(
         self, filter, remaining, jobLock, results, blockNum=None

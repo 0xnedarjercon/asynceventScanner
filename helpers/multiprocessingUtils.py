@@ -6,8 +6,8 @@ import time
 from logger import Logger
 import sys
 import multiprocessing.managers
-from utils import decodeEvents
-from utils import blocks, getLastBlock, getW3
+from helpers.utils import decodeEvents
+from helpers.utils import blocks, getLastBlock, getW3
 import asyncio
 from constants import c
 from math import sqrt

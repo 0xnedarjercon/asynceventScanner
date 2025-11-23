@@ -1,9 +1,3 @@
-# TODO
-import sys
-
-print(sys.executable)
-import collections
-
 from web3 import Web3
 import time
 import json
@@ -18,7 +12,7 @@ directory = os.path.dirname(os.path.abspath(__file__))
 from fileHandler import DBFileHandler
 from dotenv import load_dotenv
 import asyncio
-from utils import getW3
+from helpers.utils import getW3
 
 # from Verifier import Verifier
 
@@ -46,26 +40,20 @@ def getEventParameters(param):
 
 
 class EventScanner(Logger):
-
-    def __init__(
-        self,
-        showprogress=True,
-    ):
+    def __init__( self, showprogress=True ):
         load_dotenv()
         folderPath = os.getenv("FOLDER_PATH")
         configPath = (
             f"{os.path.dirname(os.path.abspath(__file__))}/settings/{folderPath}/"
         )
-        fileSettings, scanSettings, rpcSettings, web3Settings = loadConfig(
-            configPath + "/config.yml"
-        )
+        fileSettings, scanSettings, rpcSettings, web3Settings = loadConfig(configPath + "/config.yml" )
         self.live = False
         self.configPath = configPath
         Logger.setProcessName("scanner")
         self.loadSettings(scanSettings)
         super().__init__("es")
         self.w3 = None
-        self.fileHandler = DBFileHandler(fileSettings, configPath, "fh")
+        self.fileHandler = DBFileHandler(fileSettings, configPath)
         self.showProgress = showprogress
         self.rpcSettings = rpcSettings
         self.rpcs = []
@@ -89,6 +77,8 @@ class EventScanner(Logger):
         self.startBlock = scanSettings["STARTBLOCK"]
         self.endBlock = scanSettings["ENDBLOCK"]
         self.liveThreshold = scanSettings["LIVETHRESHOLD"]
+        self.density = scanSettings["DENSITY"]
+        self.densityWindow = scanSettings["DENSITYWINDOW"]
 
     # processes the passed contracts and stores the event signiatures
     def processContracts(self, contracts):
@@ -115,6 +105,213 @@ class EventScanner(Logger):
         for file in files:
             if file.endswith(".json"):
                 self.abis[file[:-5]] = json.load(open(self.configPath + "ABIs/" + file))
+
+    # --------------------------- scan functions -----------------------------
+
+    # generates a filter for get_logs based on what is configured
+    def getFilter(self, start, end):
+        if self.scanMode == "ANYEVENT":
+            return {
+                "fromBlock": start,
+                "toBlock": end,
+                "topics": [],
+                "address": list(self.contracts.keys()),
+            }
+        elif self.scanMode == "ANYCONTRACT":
+            return {
+                "fromBlock": start,
+                "toBlock": end,
+                "topics": [list(self.abiLookups.keys())],
+                "address": [],
+            }
+
+    def start_get_logs( self, remaining, filterParams, results=None, jobLock=None, rpcs=None):
+        if results is None:
+            results = asyncio.Queue()
+        if jobLock is None:
+            jobLock = asyncio.Lock()
+        if rpcs is None:
+            rpcs = self.rpcs
+        found = False
+        usedRpcs = []
+        if remaining[-1] == "latest":
+            rpcModes = ["live_logs", "live_blocks"]
+        elif isinstance(remaining[-1], int):
+            rpcModes = ["get_logs"]
+        elif isinstance(remaining[-1], list):
+            rpcModes = ["get_logs"]
+        else:
+            raise Exception("unkown search type")
+        for rpc in rpcs:
+            if any(mode in rpc.modes for mode in rpcModes):
+                task = asyncio.create_task(rpc.get_logs(remaining, filterParams, results, jobLock))
+                found = True
+                usedRpcs.append(rpc)
+        assert found, "no rpcs support get_logs, add this to MODES in config"
+        return results, remaining, jobLock, usedRpcs
+
+    async def scanFixedEnd(self, blocks):
+        start = blocks[0][0]
+        endBlock = blocks[-1][1]
+        filterParams = self.getFilter(start, endBlock)
+        remaining = blocks
+        startTime = time.time()
+        self.logInfo(f"starting fixed scan at {time.asctime(time.localtime(startTime))}, scanning {start} to {endBlock}", True)
+        results, remaining, jobLock, usedRpcs = self.start_get_logs(remaining, filterParams)
+        blocksToScan = filterParams["toBlock"] - filterParams["fromBlock"]
+        with tqdm(total=blocksToScan) as progress_bar:
+            while self.fileHandler.latest < endBlock:
+                resultsTmp = []
+                while not results.empty():
+                    resultsTmp.append(await results.get())
+                    # self.logInfo(f'got results {[(x[0], x[2]) for x in resultsTmp]}')
+                await self.storeResults(resultsTmp, decoded=False, useLatest=self.density<100)
+                if len(resultsTmp)>0:
+                    self.updateProgress( progress_bar, startTime, start,  blocksToScan, resultsTmp[-1][-1] - resultsTmp[0][0])
+                await asyncio.sleep(1)
+        for rpc in usedRpcs:
+            rpc.running = False
+        self.logInfo(
+            f"Completed: Scanned blocks {start}-{self.endBlock} in {time.time()-startTime}s from {time.asctime(time.localtime(startTime))} to {time.asctime(time.localtime(time.time()))}",
+            True,
+        )
+        self.logInfo(
+            f"average {(endBlock-start)/(time.time()-startTime)} blocks per second",
+            True,
+        )
+        await self.fileHandler.asyncSave()
+        return results
+        # updates progress bar for fixed scan
+
+    def updateProgress( self,  progress_bar,startTime,  start,  totalBlocks, numBlocks):
+        elapsedTime = time.time() - startTime
+        progress = self.fileHandler.latest - start
+        avg = progress / elapsedTime + 0.1
+        remainingTime = (totalBlocks - progress) / avg
+        eta = f"{int(remainingTime)}s ({time.asctime(time.localtime(time.time()+remainingTime))})"
+        progress_bar.set_description(
+            f"Stored up to: {self.fileHandler.latest} ETA:{eta} avg: {avg} blocks/s {progress}/{totalBlocks}"
+        )
+        progress_bar.update(numBlocks)
+
+    async def getResults(self, results, decode=True):
+        tmp = []
+        while not results.empty():
+            res = await results.get()
+            if decode:
+                decoded = self.decodeEvents(res[1])
+                if len(decoded) > 0:
+                    tmp.append([res[0], decoded, res[1]])
+        return tmp
+
+    # stores get_logs results into the file handler scanResults is a list of listProxy jobs
+    async def storeResults(
+        self, scanResults, forceSave=False, decoded=False, useLatest=False
+    ):
+        storedData = []
+        if len(scanResults) > 0:
+            for scanResult in scanResults:
+                if not decoded:
+                    decodedEvents = self.decodeEvents(scanResult[1])
+                else:
+                    decodedEvents = scanResult[1]
+                self.logInfo(f"events found: {len(decodedEvents)}")
+                blockNums = list(decodedEvents.keys())
+                i = 0
+                if len(blockNums) > 0:
+                    blockNum = blockNums[i]
+                    while blockNum <= self.fileHandler.latest and i < len(blockNums):
+                        blockNum = blockNums[i]
+                        if len(decodedEvents) == 0:
+                            return
+                        del decodedEvents[blockNum]
+                        i += 1
+
+                if isinstance(scanResult[2], int):
+                    end = scanResult[2]
+                else:
+                    end = list(decodedEvents.keys())[-1]
+
+                storedData.append(
+                    [
+                        max(self.fileHandler.latest, scanResult[0]),
+                        decodedEvents,
+                        end,
+                    ]
+                )
+            if forceSave:
+                self.fileHandler.save()
+            return await self.fileHandler.process(
+                storedData, useLatest=useLatest
+            )
+        else:
+            return 0
+
+    # scans from a specified block, then transitions to live mode, polling for latest blocks
+    async def scanBlocks(self, start=None, end=None):   
+        if start is None:
+            start = self.startBlock
+        elif start == "current":
+            start = await self.w3.eth.get_block_number() - 120
+        if end is None:
+            end = self.endBlock
+        elif end == "current":
+            end = await self.w3.eth.get_block_number()
+        if isinstance(end, int):
+            await self.scanMissingBlocks(start, end)
+            return results, None, None, None
+        else:
+            _end = await self.w3.eth.get_block_number()
+            self.logInfo(f"latest block {_end}, latest stored {end}")
+            while _end - self.fileHandler.latest > self.liveThreshold:
+                _end = await self.w3.eth.get_block_number()
+                results.append(await self.scanMissingBlocks(start, _end))
+            self.logInfo(
+                f"------------------going into live mode, current block: {_end} latest: {self.fileHandler.latest}------------------",
+                True,
+            )
+            await self.fileHandler.setup(start)
+            filterParams = self.getFilter(self.fileHandler.latest + 1, "latest")
+            remaining = [filterParams["fromBlock"], "latest"]
+            results, remaining, jobLock, usedRpcs = self.start_get_logs(remaining, filterParams)
+            self.live = True
+            return results, remaining, jobLock, usedRpcs
+
+    # triggers fixed scan for any gaps in the stored data for the range provided
+    async def scanMissingBlocks(self, start, end):
+        results = []
+        ranges = []
+        curStart = start
+        curEnd = start
+        if self.density <100:
+            onBlocks = self.density*self.densityWindow//100
+            offBlocks = self.densityWindow - onBlocks
+            while curEnd <end:
+                curEnd = min(curStart + onBlocks, end)
+                ranges.append( (curStart, curEnd))
+                curStart = curEnd +offBlocks+1
+        else:
+            ranges.append( (start, end))
+        missingBlocks =[]
+        for r in ranges:
+            missingBlocks += self.fileHandler.checkMissing(r[0], r[1])  
+        for missingBlock in missingBlocks:
+            await self.fileHandler.setup(missingBlock[0])
+            results.append(await self.scanFixedEnd( missingBlocks))
+        await self.fileHandler.setup(end)
+        return results
+
+    async def getEvents(self, start, end, results={}):
+        await self.scanMissingBlocks(start, end)
+        self.fileHandler.getEvents(start, end, results)
+        return results
+
+    def findGasRpc(self, rpcs):
+        for rpc in rpcs:
+            if rpc.websocket and (
+                "live_logs" in rpc.modes or "live_blocks" in rpc.modes
+            ):
+                return rpc
 
     # ---------------------------- event processing -----------------------------------
     # breaks down event data into a usable dict
@@ -178,223 +375,6 @@ class EventScanner(Logger):
         self.logInfo("keyboard interrupt")
         self.saveState()
 
-    # --------------------------- scan functions -----------------------------
-
-    # generates a filter for get_logs based on what is configured
-    def getFilter(self, start, end):
-        if self.scanMode == "ANYEVENT":
-            return {
-                "fromBlock": start,
-                "toBlock": end,
-                "topics": [],
-                "address": list(self.contracts.keys()),
-            }
-        elif self.scanMode == "ANYCONTRACT":
-            return {
-                "fromBlock": start,
-                "toBlock": end,
-                "topics": [list(self.abiLookups.keys())],
-                "address": [],
-            }
-
-    def start_get_logs(
-        self, remaining, filterParams, results=None, jobLock=None, rpcs=None
-    ):
-        if results is None:
-            results = asyncio.Queue()
-        if jobLock is None:
-            jobLock = asyncio.Lock()
-        if rpcs is None:
-            rpcs = self.rpcs
-        found = False
-        usedRpcs = []
-        if remaining[-1] == "latest":
-            rpcModes = ["live_logs", "live_blocks"]
-        elif isinstance(remaining[-1], int):
-            rpcModes = ["get_logs"]
-        else:
-            raise Exception("unkown search type")
-        for rpc in rpcs:
-            if any(mode in rpc.modes for mode in rpcModes):
-                task = asyncio.create_task(
-                    rpc.get_logs(remaining, filterParams, results, jobLock)
-                )
-                found = True
-                usedRpcs.append(rpc)
-        assert found, "no rpcs support get_logs, add this to MODES in config"
-        return results, remaining, jobLock, usedRpcs
-
-    async def scanFixedEnd(self, start, endBlock):
-        filterParams = self.getFilter(start, endBlock)
-        remaining = [filterParams["fromBlock"], filterParams["toBlock"]]
-        startTime = time.time()
-        self.logInfo(
-            f"starting fixed scan at {time.asctime(time.localtime(startTime))}, scanning {start} to {endBlock}",
-            True,
-        )
-        results, remaining, jobLock, usedRpcs = self.start_get_logs(
-            remaining, filterParams
-        )
-        blocksToScan = filterParams["toBlock"] - filterParams["fromBlock"]
-        with tqdm(total=blocksToScan) as progress_bar:
-            while self.fileHandler.latest < endBlock:
-                resultsTmp = []
-                while not results.empty():
-                    resultsTmp.append(await results.get())
-                    self.logInfo(f'got results {[(x[0], x[2]) for x in resultsTmp]}')
-                    await self.storeResults(resultsTmp, decoded=False)
-                    self.updateProgress(
-                        progress_bar,
-                        startTime,
-                        start,
-                        blocksToScan,
-                        resultsTmp[-1][-1] - resultsTmp[0][0],
-                    )
-                await asyncio.sleep(1)
-        for rpc in usedRpcs:
-            rpc.running = False
-        self.logInfo(
-            f"Completed: Scanned blocks {start}-{self.endBlock} in {time.time()-startTime}s from {time.asctime(time.localtime(startTime))} to {time.asctime(time.localtime(time.time()))}",
-            True,
-        )
-        self.logInfo(
-            f"average {(endBlock-start)/(time.time()-startTime)} blocks per second",
-            True,
-        )
-        await self.fileHandler.asyncSave()
-        return results
-        # updates progress bar for fixed scan
-
-    def updateProgress(
-        self,
-        progress_bar,
-        startTime,
-        start,
-        totalBlocks,
-        numBlocks,
-    ):
-        elapsedTime = time.time() - startTime
-        progress = self.fileHandler.latest - start
-        avg = progress / elapsedTime + 0.1
-        remainingTime = (totalBlocks - progress) / avg
-        eta = f"{int(remainingTime)}s ({time.asctime(time.localtime(time.time()+remainingTime))})"
-        progress_bar.set_description(
-            f"Stored up to: {self.fileHandler.latest} ETA:{eta} avg: {avg} blocks/s {progress}/{totalBlocks}"
-        )
-        progress_bar.update(numBlocks)
-
-    async def getResults(self, results, decode=True):
-        tmp = []
-        while not results.empty():
-            res = await results.get()
-            if decode:
-                decoded = self.decodeEvents(res[1])
-                if len(decoded) > 0:
-                    tmp.append([res[0], decoded, res[1]])
-        return tmp
-
-    # stores get_logs results into the file handler scanResults is a list of listProxy jobs
-    async def storeResults(
-        self, scanResults, forceSave=False, decoded=False, guarunteedContinuous=False
-    ):
-        storedData = []
-        if len(scanResults) > 0:
-            for scanResult in scanResults:
-                if not decoded:
-                    decodedEvents = self.decodeEvents(scanResult[1])
-                else:
-                    decodedEvents = scanResult[1]
-                self.logInfo(f"events found: {len(decodedEvents)}")
-                blockNums = list(decodedEvents.keys())
-                i = 0
-                if len(blockNums) > 0:
-                    blockNum = blockNums[i]
-                    while blockNum <= self.fileHandler.latest and i < len(blockNums):
-                        blockNum = blockNums[i]
-                        if len(decodedEvents) == 0:
-                            return
-                        del decodedEvents[blockNum]
-                        i += 1
-
-                if isinstance(scanResult[2], int):
-                    end = scanResult[2]
-                else:
-                    end = list(decodedEvents.keys())[-1]
-
-                storedData.append(
-                    [
-                        max(self.fileHandler.latest, scanResult[0]),
-                        decodedEvents,
-                        end,
-                    ]
-                )
-            if forceSave:
-                self.fileHandler.save()
-            return await self.fileHandler.process(
-                storedData, guarunteedContinuous=guarunteedContinuous
-            )
-        else:
-            return 0
-
-    # scans from a specified block, then transitions to live mode, polling for latest blocks
-    async def scanBlocks(self, start=None, end=None):
-        results = []
-        if start is None:
-            start = self.startBlock
-        if start == "current":
-            start = await self.w3.eth.get_block_number() - 120
-        if end is None:
-            end = self.endBlock
-        if end == "current":
-            end = await self.w3.eth.get_block_number()
-        if isinstance(end, int):
-            results += await self.scanMissingBlocks(start, end)
-            return results, None, None, None
-        else:
-            await self.fileHandler.setup(start)
-            _end = await self.w3.eth.get_block_number()
-            self.logInfo(f"latest block {_end}, latest stored {end}")
-            while _end - self.fileHandler.latest > self.liveThreshold:
-                _end = await self.w3.eth.get_block_number()
-
-                results.append(await self.scanMissingBlocks(start, _end))
-            self.logInfo(
-                f"------------------going into live mode, current block: {_end} latest: {self.fileHandler.latest}------------------",
-                True,
-            )
-            await self.fileHandler.setup(start)
-            filterParams = self.getFilter(self.fileHandler.latest + 1, "latest")
-            remaining = [filterParams["fromBlock"], "latest"]
-            results, remaining, jobLock, usedRpcs = self.start_get_logs(
-                remaining, filterParams
-            )
-            self.live = True
-            return results, remaining, jobLock, usedRpcs
-
-    # triggers fixed scan for any gaps in the stored data for the range provided
-    async def scanMissingBlocks(self, start, end, callback=None):
-        results = []
-        missingBlocks = self.fileHandler.checkMissing(start, end)
-        
-        for missingBlock in missingBlocks:
-            await self.fileHandler.setup(missingBlock[0])
-            results.append(await self.scanFixedEnd(missingBlock[0], missingBlock[1]))
-        await self.fileHandler.setup(end)
-        return results
-
-    async def getEvents(self, start, end, results={}):
-        await self.scanMissingBlocks(start, end)
-        self.fileHandler.getEvents(start, end, results)
-        return results
-
-    def findGasRpc(self, rpcs):
-        for rpc in rpcs:
-            if rpc.websocket and (
-                "live_logs" in rpc.modes or "live_blocks" in rpc.modes
-            ):
-                return rpc
-
-
 def readConfig(configPath):
     with open(configPath + "config.json") as f:
         cfg = json.load(f)
@@ -411,9 +391,7 @@ async def main():
     
     es = await EventScanner().initRpcs()
     
-    results, remaining, jobLock, usedRpcs = await es.scanBlocks(
-        scanSettings["STARTBLOCK"], scanSettings["ENDBLOCK"]
-    )
+    results, remaining, jobLock, usedRpcs = await es.scanBlocks(scanSettings["STARTBLOCK"], scanSettings["ENDBLOCK"])
     gasRpc = es.findGasRpc(usedRpcs)
     while es.live:
         receivedResults = []
@@ -423,7 +401,7 @@ async def main():
             print(f"current gas price {gasRpc.gasPrice}")
             print(len(receivedResults))
             await es.storeResults(
-                receivedResults, guarunteedContinuous=True, decoded=True
+                receivedResults, useLatest=True, decoded=True
             )
             print(es.fileHandler.latest)
         await asyncio.sleep(1)

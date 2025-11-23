@@ -1,0 +1,108 @@
+#settings for rpc proiders
+RPCSETTINGS:
+  https://base.llamarpc.com:
+    MAXCHUNKSIZE: 1000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://base.drpc.org:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - ""
+    POLLPERIOD: 1
+  https://api.zan.top/base-mainnet:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://developer-access-mainnet.base.org:
+    MAXCHUNKSIZE: 10000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 5000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://mainnet.base.org:
+    MAXCHUNKSIZE: 9000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 9000
+    LOGNAMES:
+      - default
+    MODES:
+      - get_logs
+    POLLPERIOD: 1
+  https://base-rpc.publicnode.com:
+    MAXCHUNKSIZE: 5000
+    STARTCHUNKSIZE: 5
+    EVENTSTARGET: 100
+    LOGNAMES:
+      - default
+    POLLPERIOD: 1
+    MODES:
+      - live_blocks
+W3SETTINGS:
+  NUMJOBS: 2
+  MAINRPC: false
+  LOGNAMES:
+    - default
+RPCOVERRIDE:
+  MAXCHUNKSIZE: ""
+  STARTCHUNKSIZE: ""
+  EVENTSTARGET: ""
+  POLLINTERVAL: ""
+  DEBUGLEVEL: ""
+  ACTIVESTATES: ""
+FILESETTINGS:
+  SAVEINTERVAL: 600
+  FILENAME: basescan
+  MAXENTRIES: 10000
+  LOGNAMES:
+    - default
+  FRESHLOGS: true
+  TYPE: SQLITE3             #type of file storage - SQLITE3 or JSON
+  DBSETTINGS:
+    TABLENAME: aeroprices         #name of the table
+    TABLEFORMAT:            #SQL table format, 
+    #standard output from getLogs
+      block_number:         'BIGINT  NOT NULL'
+      'tx_hash'  :          'TEXT    NOT NULL'
+      'contract_address' :  'TEXT    NOT NULL'
+      'event_type'   :      'TEXT    NOT NULL'
+      'event_index'  :      'INTEGER NOT NULL'
+  #event specific output from getlogs, searches inside logdata and populates if exists
+      'event_data'  :       "JSON   DEFAULT '{}'" #contains json dumped event data not listed above
+    PRIMARYKEYS: [block_number, tx_hash, event_type, event_index]
+    ADDRESSES: []           #which addresses should go into this db, empty for all
+    INDEXEDFIELDS: []       #additional index if needed
+    NEEDSUNIQUE: false      #whether indexed fields need to be unique
+
+SCANSETTINGS:
+  NAME: scanner
+  STARTBLOCK: 16088296
+  ENDBLOCK: 'current'
+  LIVETHRESHOLD: 100
+  FORCENEW: false
+  DENSITY: 1 # % of blocks to scan (useful for intermittent price data, does not work with endblock: 'latest')
+  DENSITYWINDOW: 15000 # Interval over which to apply density i.e for 50% at 5000 2500 scanned followed by 2500 skipped
+
+  CONTRACTS:
+    0x7f670f78b17dec44d5ef68a48740b6f8849cc2e6: AEROPAIR
+    0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d: AEROPAIR
+  MODE: ANYEVENT
+  EVENTS:
+    - Sync
+    - Transfer

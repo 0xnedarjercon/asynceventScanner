@@ -5,3 +5,7 @@
 .json
 node_modules/*
 node_modules
+.hypothesis/*
+__pycache__/*
+.artifacts/*
+cache/*

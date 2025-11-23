@@ -5,11 +5,11 @@ from rpc import RPC
 import atexit
 import copy
 import time
-from utils import getLastBlock
+from helpers.utils import getLastBlock
 from logger import Logger
 from configLoader import loadConfig
 from hardhat import runHardhat
-from multiprocessingUtils import Worker, SharedResult, JobManager, ContinuousWrapper  , getW3   
+from helpers.multiprocessingUtils import Worker, SharedResult, JobManager, ContinuousWrapper  , getW3   
 import asyncio
 class MultiWeb3(Logger):
     @classmethod

@@ -4,19 +4,25 @@ import time
 from logger import Logger
 import aiofiles
 import aiosqlite
-from SqlGenerators import sql_create_table, build_upsert_sql
+from helpers.SqlGenerators import sql_create_table, build_upsert_sql
 import sqlite3
-
-# currently assumes all files stored are sequential
+from decimal import Decimal
+def adaptDec(dec):
+    return str(dec)
+def adaptDict(d):
+    return json.dumps(d)
+sqlite3.register_adapter(Decimal, adaptDec)
+sqlite3.register_adapter(dict, adaptDict)
+aiosqlite.register_adapter(Decimal, adaptDec)
+aiosqlite.register_adapter(dict, adaptDict)
 
 class DBFileHandler(Logger):
-    def __init__(self, fileSettings,
-        configPath,name):
-        super().__init__('fh', fileSettings["LOGNAMES"])
+    def __init__(self, fileSettings,configPath):
+        
         self.loadSettings(fileSettings['DBSETTINGS'])
+        super().__init__(self.name, fileSettings["LOGNAMES"])
         self.filePath = configPath + "data/"
         os.makedirs(self.filePath, exist_ok=True)
-        self.name = name
         self.conflicts = list(self.primaryKey if self.primaryKey is not None else self.uniqueKeys)
         self.columns = list(self.tableFormat.keys())
         self.placeHolder = '?'
@@ -24,7 +30,7 @@ class DBFileHandler(Logger):
         for i in range(len(self.conflicts)):
             if self.conflicts[i].strip().endswith(' DESC'):
                 self.conflicts[i] = self.conflicts[i].strip()[:-5]  
-        with sqlite3.connect(f"{self.filePath}{name}.db") as db:
+        with sqlite3.connect(f"{self.filePath}{self.name}.db") as db:
             db.execute(sql_create_table(self.name, self.tableFormat,self.primaryKey))
             db.execute(sql_create_table('metadata', {'minBlock': 'BIGINT', 'maxBlock': 'BIGINT'},[] ))
             #TODO add indexed fields option
@@ -48,7 +54,6 @@ class DBFileHandler(Logger):
         else:
             self.latest = 0
             for item in self.metadata:
-                
                 if self.latest == 0:
                     #if first block start is after start then start from startBlock
                     if item[0] > startBlock+1 :
@@ -69,23 +74,22 @@ class DBFileHandler(Logger):
             self.latest = startBlock -1
             self.logInfo('no previous data found')
         return self.latest
-    
+    #returns a list of block ranges not yet stored
     def checkMissing(self, start, end):
         missing = []
         i = 0
-        started = False
         current = start
         for rangeStart, rangeEnd in self.metadata:
             if current < rangeStart:
-                missing.append((current, rangeStart-1))
+                missing.append([current, rangeStart-1])
             current = max(current, rangeEnd+1)
             if current >end: 
                 break
         if current <= end:
-            missing.append((current, end-1))
+            missing.append([current, end-1])
         self.logInfo(f"missing block ranges: {missing}")
         return missing
-    
+    #combines metadata ranges to minimise number of elements
     def shrinkMetadata(self, con):
         if len(self.metadata)<=1 :
             return
@@ -114,7 +118,7 @@ class DBFileHandler(Logger):
             con.commit()
         except Exception as e:
             print(f"Metadata shrink failed: {e}")
-            self.con.rollback()
+            con.rollback()
 
 
     def loadSettings(self, cfg):
@@ -123,6 +127,7 @@ class DBFileHandler(Logger):
         self.primaryKey = cfg["PRIMARYKEYS"]
         self.indexedFields = cfg["INDEXEDFIELDS"]
         self.needsUnique = cfg["NEEDSUNIQUE"] 
+        self.name = cfg["TABLENAME"]
 
     async def asyncSave(self, deleteOld=True, indent=None):
         pass
@@ -167,8 +172,9 @@ class DBFileHandler(Logger):
                                 row[i] = json.dumps(payload) if payload else "{}"
                         rows.append(row)
         return rows
+    
     #add s to the db from tuple format
-    #must be entire row, in the order of columns
+    #in the order of columns
     async def addTupleEvents(self, rows):
         upsert_sql = build_upsert_sql(self.columns, self.name,tuple(self.conflicts) )
         try:
@@ -179,25 +185,25 @@ class DBFileHandler(Logger):
             await self.con.rollback()
 
     #results array [fromBlock, events, toBlock]
-    async def process(self, results, guarunteedContinuous =False):
+    async def process(self, results, useLatest =False):
         for result in results:
             start, data, end = result
             rows = self.prepareJsonEvents(data)
-            if guarunteedContinuous:
+            if useLatest:
                 self.latest = max(end, self.latest)
             else:
                 self.addToPending((start, end))
                 self.logInfo(f"data added to pending {start} to {end}")
             try:
                 upsert_sql = build_upsert_sql(self.columns, self.name,tuple(self.conflicts) )
-                metadata_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata' )
+                metadata_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
                 await self.con.executemany(upsert_sql, rows)
                 await self.con.execute(metadata_sql, (start, end))
                 self.metadata.append((start, end))
                 await self.con.commit()
             except Exception as e:
                 print(e)
-                self.con.rollback()
+                await self.con.rollback()
         self.mergePending()
         
         
@@ -220,6 +226,16 @@ class DBFileHandler(Logger):
         query = f'SELECT {columns if columns else '*'} FROM "{self.name}" WHERE {query}'
         rows = await self.con.execute(query, params).fetchall()
         return rows
+    
+    def exportCsv(self, csv_path):
+        import csv
+        with sqlite3.connect(f"{self.filePath}{self.name}.db") as db:
+            cur = db.cursor()
+            cur.execute(f'select * from {self.name} order by block_number')
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(list(self.columns))
+                writer.writerows(cur) 
 
 
 class JSONFileHandler(Logger):
@@ -416,3 +432,14 @@ class JSONFileHandler(Logger):
             position += 1
         self.pending.insert(position, element)
         self.logInfo(f"data added to pending {element[0]} to {element[2]}")
+
+
+
+if __name__ == "__main__":
+    from configLoader import cfg, folderPath
+    configPath = (
+        f"{os.path.dirname(os.path.abspath(__file__))}/settings/{folderPath}/"
+    )
+    fileSettings, scanSettings, rpcSettings, web3Settings = cfg
+    db = DBFileHandler(fileSettings,configPath)
+    db.exportCsv('tmp.csv')
