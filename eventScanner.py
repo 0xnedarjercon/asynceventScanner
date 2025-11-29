@@ -270,7 +270,7 @@ class EventScanner(Logger):
         elif end == "current":
             end = await self.w3.eth.get_block_number()
         if isinstance(end, int):
-            await self.scanMissingBlocks(start, end)
+            results = await self.scanMissingBlocks(start, end)
             return results, None, None, None
         else:
             _end = await self.w3.eth.get_block_number()
