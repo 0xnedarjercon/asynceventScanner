@@ -2,11 +2,11 @@ import json
 from dotenv import load_dotenv
 import os
 import yaml
-
+dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv()
 folderPath = os.getenv("FOLDER_PATH")
-configPath = f"{os.path.dirname(os.path.abspath(__file__))}/settings/{folderPath}/"
-abiPath = f"{os.path.dirname(os.path.abspath(__file__))}/settings/ABIs/"
+configPath = f"{dir}/settings/{folderPath}/"
+abiPath = f"{dir}/settings/ABIs/"
 fileSettings = {}
 scanSettings = {}
 rpcSettings = {}
@@ -38,8 +38,10 @@ def loadConfig(config):
 
 def refreshLogs():
     print("removing old logfiles...")
-    for item_name in os.listdir(f"./settings/{folderPath}/logs/"):
-        item_path = os.path.join(f"./settings/{folderPath}/logs", item_name)
+    if not os.path.exists(f"{dir}/settings/{folderPath}/logs/"):
+        os.makedirs(f"{dir}/settings/{folderPath}/logs/")
+    for item_name in os.listdir(f"{dir}/settings/{folderPath}/logs/"):
+        item_path = os.path.join(f"{dir}/settings/{folderPath}/logs", item_name)
         if os.path.isfile(item_path):
             os.remove(item_path)
             print(f"Deleted file: {item_path}")
