@@ -238,6 +238,7 @@ class RPC(Logger):
         filter["toBlock"] = _max
         async with jobLock:
             remaining.insert(0, [_min, _max])
+            self.logInfo(f"returned job {_min}:{_max} to remaining")
 
     async def processNewEvents(
         self, filter, remaining, jobLock, results, blockNum=None
@@ -262,6 +263,8 @@ class RPC(Logger):
             self.logInfo(
                 f"processed events: {len(events)}, ({blockRange}) blocks, throttled to {self.currentChunkSize}"
             )
+        else:
+            self.currentChunkSize = min(self.currentChunkSize*3, self.maxChunkSize)
 
     # -----------------------rpc error handling------------------------------------
 

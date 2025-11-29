@@ -153,6 +153,7 @@ class EventScanner(Logger):
                 )
                 found = True
                 usedRpcs.append(rpc)
+                self.logInfo(f"using rpc {rpc.apiUrl} for get_logs")
         assert found, "no rpcs support get_logs, add this to MODES in config"
         return results, remaining, jobLock, usedRpcs
 
@@ -251,13 +252,7 @@ class EventScanner(Logger):
                 else:
                     end = list(decodedEvents.keys())[-1]
 
-                storedData.append(
-                    [
-                        max(self.fileHandler.latest, scanResult[0]),
-                        decodedEvents,
-                        end,
-                    ]
-                )
+                storedData.append([max(self.fileHandler.latest, scanResult[0]), decodedEvents,  end  ])
             if forceSave:
                 self.fileHandler.save()
             return await self.fileHandler.process(storedData, useLatest=useLatest)
