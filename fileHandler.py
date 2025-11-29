@@ -6,6 +6,7 @@ import aiofiles
 import aiosqlite
 from helpers.SqlGenerators import sql_create_table, build_upsert_sql
 import sqlite3
+import bisect
 from decimal import Decimal
 def adaptDec(dec):
     return str(dec)
@@ -37,7 +38,10 @@ class DBFileHandler(Logger):
             db.commit()
             query = f'SELECT * FROM "metadata" order by "minBlock";'
             self.metadata =  db.execute(query).fetchall()
-            self.shrinkMetadata(db)
+            if self.shrinkMetadata():   
+                db.execute('DELETE FROM "metadata";')
+                upsert_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
+                db.executemany(upsert_sql, self.metadata)
             db.commit()
         
         self.con = aiosqlite.connect(f"{self.filePath}{self.name}.db")
@@ -48,6 +52,7 @@ class DBFileHandler(Logger):
         self.pending = []
         if self.con.ident is None:
             await self.con.__aenter__()
+        self.updateLatest(startBlock)
         if len(self.metadata) == 0:
             self.latest = startBlock -1
             return 
@@ -74,6 +79,33 @@ class DBFileHandler(Logger):
             self.latest = startBlock -1
             self.logInfo('no previous data found')
         return self.latest
+    def updateLatest(self, startBlock):
+        if len(self.metadata) == 0:
+            self.latest = startBlock -1
+            return 
+        else:
+            self.latest = 0
+            for item in self.metadata:
+                if self.latest == 0:
+                    #if first block start is after start then start from startBlock
+                    if item[0] > startBlock+1 :
+                        self.latest = startBlock -1
+                        return self.latest
+                    # otherwise if end of first block is after start, check continuity of next blocks
+                    elif item[1] >startBlock +1:
+                        self.latest = item[1]
+                #if next range is not continuous with current one, latest is the end of the last range
+                elif item[0]> self.latest+1:
+                    break
+                #otherwise keep counting forward
+                elif item[1]>= startBlock-1:
+                        self.latest = item[1]
+                else:
+                    assert False
+            if self.latest == 0:
+                self.latest = startBlock -1
+                self.logInfo('no previous data found')
+
     #returns a list of block ranges not yet stored
     def checkMissing(self, start, end):
         missing = []
@@ -90,9 +122,10 @@ class DBFileHandler(Logger):
         self.logInfo(f"missing block ranges: {missing}")
         return missing
     #combines metadata ranges to minimise number of elements
-    def shrinkMetadata(self, con):
+    def shrinkMetadata(self):
+        changed = False
         if len(self.metadata)<=1 :
-            return
+            return changed
         newMetadata = []
         start = None
         end = None
@@ -105,20 +138,15 @@ class DBFileHandler(Logger):
                 end = curEnd
             elif curStart <= end + 1:
                 end = max(end, curEnd)
+                changed = True
             else:
                 newMetadata.append((start, end))
                 start = curStart
                 end = curEnd
         newMetadata.append((start, end))
         self.metadata = newMetadata
-        try:
-            con.execute('DELETE FROM "metadata";')
-            upsert_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
-            con.executemany(upsert_sql, self.metadata)
-            con.commit()
-        except Exception as e:
-            print(f"Metadata shrink failed: {e}")
-            con.rollback()
+        return changed
+
 
 
     def loadSettings(self, cfg):
@@ -186,40 +214,54 @@ class DBFileHandler(Logger):
 
     #results array [fromBlock, events, toBlock]
     async def process(self, results, useLatest =False):
+        tmpMetadata = []
         for result in results:
             start, data, end = result
             rows = self.prepareJsonEvents(data)
-            if useLatest:
-                self.latest = max(end, self.latest)
-            else:
-                self.addToPending((start, end))
-                self.logInfo(f"data added to pending {start} to {end}")
+            failed = True
+            tmpMetadata.append((start, end))
             try:
                 upsert_sql = build_upsert_sql(self.columns, self.name,tuple(self.conflicts) )
-                metadata_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
                 await self.con.executemany(upsert_sql, rows)
-                await self.con.execute(metadata_sql, (start, end))
-                self.metadata.append((start, end))
+                failed = False
+            except Exception as e:
+                self.logInfo('insert to db failed {e}')
+                await self.con.rollback()
+        if not failed:
+            self.metadata = sorted(self.metadata + tmpMetadata, key=lambda x: x[0])
+            try:
+                if self.shrinkMetadata():
+                    await self.con.execute('DELETE FROM "metadata";')
+                    upsert_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
+                    await self.con.executemany(upsert_sql, self.metadata)
+                else:
+                    metadata_sql = build_upsert_sql(self.metadataTableFormat.keys(), 'metadata')
+                    await self.con.execute(metadata_sql, (start, end))
                 await self.con.commit()
             except Exception as e:
-                print(e)
+                self.logInfo('insert to metadata db failed {e}')
                 await self.con.rollback()
-        self.mergePending()
+                
+        if useLatest:
+            self.latest = max([x[2] for x in results]+[end])
+        else:
+            self.updateLatest(self.latest)
         
         
-    def mergePending(self):
-        while len(self.pending) > 0 and self.pending[0][0] <= self.latest + 1:
-            self.latest = max(self.pending[0][1], self.latest)
-            self.pending.pop(0)
-        self.logInfo(f"waiting for: {self.latest+1}")
+        
+    # def mergePending(self):
+    #     while len(self.pending) > 0 and self.pending[0][0] <= self.latest + 1:
+    #         self.latest = max(self.pending[0][1], self.latest)
+    #         self.pending.pop(0)
+    #     self.logInfo(f"waiting for: {self.latest+1}")
 
 
-    def addToPending(self, element):
-        position = 0
-        while position < len(self.pending) and self.pending[position][0] < element[0]:
-            position += 1
-        self.pending.insert(position, element)
-        self.logInfo(f"data added to pending {element[0]} to {element[1]}")
+    # def addToPending(self, element):
+    #     position = 0
+    #     while position < len(self.pending) and self.pending[position][0] < element[0]:
+    #         position += 1
+    #     self.pending.insert(position, element)
+    #     self.logInfo(f"data added to pending {element[0]} to {element[1]}")
     
     async def fetch(self, query, params = None, columns = None ):
         self.ensureCon()            
