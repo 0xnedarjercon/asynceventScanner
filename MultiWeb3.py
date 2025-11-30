@@ -182,13 +182,14 @@ class MultiWeb3(Logger):
 if __name__ == "__main__":
 
     from dotenv import load_dotenv
+    from configLoader import cfg
     import os
     import json
 
     load_dotenv()
     folderPath = os.getenv("FOLDER_PATH")
     _configPath = f"{os.path.dirname(os.path.abspath(__file__))}/settings/{folderPath}/"
-    fileSettings, scanSettings, rpcSettings, rpcInterfaceSettings, hreSettings = (
-        loadConfig(_configPath + "/config.json")
-    )
+    fileSettings, scanSettings, rpcSettings, web3Settings = cfg
+
     mw3 = MultiWeb3(rpcSettings)
+    mw3.setup_get_logs()
