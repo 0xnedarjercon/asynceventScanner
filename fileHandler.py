@@ -45,7 +45,9 @@ class DBFileHandler(Logger):
             db.commit()
         
         self.con = aiosqlite.connect(f"{self.filePath}{self.name}.db")
-        
+    async def ensureCon(self):
+        if self.con.ident is None:
+            await self.con.__aenter__()
     async def setup(self, startBlock):
         self.logInfo(f"setting up new scan")
         self.start = startBlock
@@ -264,9 +266,10 @@ class DBFileHandler(Logger):
     #     self.logInfo(f"data added to pending {element[0]} to {element[1]}")
     
     async def fetch(self, query, params = None, columns = None ):
-        self.ensureCon()            
+                    
         query = f'SELECT {columns if columns else '*'} FROM "{self.name}" WHERE {query}'
-        rows = await self.con.execute(query, params).fetchall()
+        cursor = await self.con.execute(query, params)
+        rows = await cursor.fetchall()
         return rows
     
     def exportCsv(self, csv_path):
